@@ -59,7 +59,7 @@ func main() {
 	dstIP := net.ParseIP(cli.DstIP)
 	fmt.Printf("%s:%d -> %s:%d\n", cli.SrcIP, cli.SrcPort, cli.DstIP, cli.DstPort)
 
-	ip4 := &gorawsocket.IPv4{
+	ip4 := &layers.IPv4{
 		Version:    4,
 		IHL:        5,
 		TOS:        0,
@@ -76,23 +76,22 @@ func main() {
 
 	udp.SetNetworkLayerForChecksum(ip4)
 
-	opts := gorawsocket.SerializeOptions{
-		FixLengths:          !cli.ZeroLen,
-		ComputeChecksums:    true,
-		HostByteOrderLength: true,
+	opts := gopacket.SerializeOptions{
+		FixLengths:            !cli.ZeroLen,
+		ComputeChecksums:      true,
+		IPLengthHostByteOrder: true,
 	}
 
-	buffer := gorawsocket.NewSerializeBuffer()
-	if err = gorawsocket.SerializeLayers(buffer, opts, ip4, udp, payload); err != nil {
+	buffer := gopacket.NewSerializeBuffer()
+	if err = gopacket.SerializeLayers(buffer, opts, ip4, udp, payload); err != nil {
 		log.WithError(err).Fatalf("unable to serialize")
 	}
 	b := buffer.Bytes()
 	printPacket(b)
 
-	var s int
-	// open socket
-	if s, err = syscall.Socket(syscall.AF_INET, syscall.SOCK_RAW, syscall.IPPROTO_RAW); err != nil {
-		log.WithError(err).Fatalf("unable to open socket")
+	sock, err := gorawsocket.NewRawSocket()
+	if err != nil {
+		log.Fatalf("%s", err.Error())
 	}
 
 	/*
@@ -106,22 +105,19 @@ func main() {
 	}
 	if bufLen != 0 {
 		log.Infof("Setting SO_SNDBUF to %d bytes", bufLen)
-
-		// set send buffer size
-		if err = syscall.SetsockoptInt(s, syscall.SOL_SOCKET, syscall.SO_SNDBUF, bufLen); err != nil {
-			log.WithError(err).Fatalf("unable to SNDBUF")
+		if err = sock.BufSize(bufLen); err != nil {
+			log.Fatalf("%s", err.Error())
 		}
 	}
 
-	// we will provide the IP header
-	if err = syscall.SetsockoptInt(s, syscall.IPPROTO_IP, syscall.IP_HDRINCL, 1); err != nil {
-		log.WithError(err).Fatalf("unable to IP_HDRINCL")
+	if err = sock.IncludeIPHeader(true); err != nil {
+		log.Fatalf("%s", err.Error())
 	}
 
 	// bypass routing table?
 	if cli.NoRoute {
-		if err = syscall.SetsockoptInt(s, syscall.SOL_SOCKET, syscall.SO_DONTROUTE, 1); err != nil {
-			log.WithError(err).Fatalf("unable to DONTROUTE")
+		if err = sock.NoRoute(true); err != nil {
+			log.Fatalf("%s", err.Error())
 		}
 	}
 
@@ -132,27 +128,23 @@ func main() {
 			log.WithError(err).Fatalf("unable to lookup %s", cli.Interface)
 		}
 
-		gorawsocket.BindDevice(s, iface)
+		if err = sock.Bind(iface); err != nil {
+			log.Fatalf("%s", err.Error())
+		}
 	}
 
 	syscall.Setgid(syscall.Getgid())
 	syscall.Setuid(syscall.Getuid())
 
 	// send it!
-	addr := syscall.SockaddrInet4{
-		// Family: AF_INET is hard coded
-		Addr: [4]byte{dstIP.To4()[0], dstIP.To4()[1], dstIP.To4()[2], dstIP.To4()[3]},
-	}
 	for i := 0; i < cli.Count; i++ {
-		// err = syscall.Sendto(s, b, 0, &addr)
-		bufLen, err = syscall.SendmsgN(s, b, []byte{}, &addr, 0)
-		if err != nil {
+		if bufLen, err = sock.Sendmsg4(b, []byte{}, dstIP, 0); err != nil {
 			log.WithError(err).Fatalf("sendto")
 		}
 
 		log.Infof("Sent %d bytes to %s:%d", bufLen, cli.DstIP, cli.DstPort)
 	}
-	syscall.Close(s)
+	sock.Close()
 }
 
 func printPacket(b []byte) {

@@ -9,9 +9,9 @@ import (
 	"syscall"
 )
 
-func BindDevice(s int, iface *net.Interface) error {
-	if err := syscall.SetsockoptString(s, syscall.SOL_SOCKET, syscall.SO_BINDTODEVICE, iface.Name); err != nil {
-		return fmt.Errorf("unable to SO_BINDTODEVICE: %s", err.Error())
+func (rs *RawSocket) Bind(iface *net.Interface) error {
+	if err := syscall.SetsockoptString(rs.Fd, syscall.SOL_SOCKET, syscall.SO_BINDTODEVICE, iface.Name); err != nil {
+		return fmt.Errorf("unable to setsockopt(SOL_SOCKET, SO_BINDTODEVICE, %s): %s", iface.Name, err.Error())
 	}
 	return nil
 }
